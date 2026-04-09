@@ -61,46 +61,7 @@ void SystemClock_Config(void);
 
 
 
-static void Pitch_Test(void)
-{
-    RTT_LOG_INFO("[PitchTest] ---- Pitch Angle Test Start ----");
-    RTT_LOG_INFO("[PitchTest] Keep car still to see stable value");
-    RTT_LOG_INFO("[PitchTest] Then tilt forward/backward to see change");
 
-    uint32_t tick = 0;
-
-    while (1)
-    {
-        uint32_t now = HAL_GetTick();
-        if (now - tick >= 200)   /* print every 200ms */
-        {
-            tick = now;
-
-            MPU6886_Update();
-            MPU6886_Data *d = MPU6886_GetData();
-
-            /* Integer print for RTT */
-            int p_i = (int)d->pitch;
-            int p_f = (int)(d->pitch * 100.0f) % 100;
-            if (p_f < 0) p_f = -p_f;
-
-            int ax_i = (int)(d->accX * 100.0f);
-            int ay_i = (int)(d->accY * 100.0f);
-            int az_i = (int)(d->accZ * 100.0f);
-
-            int gz_i = (int)d->gyroZ;
-
-            SEGGER_RTT_printf(0,
-                "[%lu] pitch=%d.%02d | "
-                "acc X=%d Y=%d Z=%d | "
-                "gyroZ=%d\r\n",
-                now,
-                p_i, p_f,
-                ax_i, ay_i, az_i,
-                gz_i);
-        }
-    }
-}
 
 
 
@@ -243,6 +204,37 @@ static void App_PrintStatus(void)
     BT_SendString(msg);
 }
 
+
+static void Pitch_Test(void)
+{
+    RTT_LOG_INFO("[PitchTest] Start, keep car still...");
+
+    uint32_t tick = 0;
+
+    while (1)
+    {
+        uint32_t now = HAL_GetTick();
+        if (now - tick >= 200)
+        {
+            tick = now;
+            MPU6886_Update();
+
+            float pitch = MPU6886_GetPitch();
+
+            int p_i = (int)pitch;
+            int p_f = (int)(pitch * 100.0f) % 100;
+            if (p_f < 0) p_f = -p_f;
+
+            SEGGER_RTT_printf(0, "[%lu] pitch=%d.%02d\r\n",
+                              now, p_i, p_f);
+        }
+    }
+}
+
+
+
+
+
 /* USER CODE END 0 */
 
 /*============================================================
@@ -282,15 +274,16 @@ int main(void)
 
 
 
-//    RTT_LOG_INFO("[Main] MPU6886 init...");
+//    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET);
+//    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
+//
 //    uint8_t ok = MPU6886_Init();
 //    if (!ok) {
-//        RTT_LOG_ERROR("[Main] MPU6886 FAILED");
+//        RTT_LOG_ERROR("[Main] MPU FAILED");
 //        while(1);
 //    }
-//    RTT_LOG_INFO("[Main] MPU6886 OK, start pitch test");
 //
-//    Pitch_Test();   /* does not return */
+//    Pitch_Test();
 
 
     RTT_LOG_INFO("[Main] Enter main loop");

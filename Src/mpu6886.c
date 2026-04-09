@@ -154,7 +154,7 @@ void MPU6886_Update(void)
 
     /*--- Complementary filter ---*/
     // X轴前后倾倒，对应的是绕Y轴旋转(gyroY)
-    imu.pitch = 0.98f * (imu.pitch + imu.gyroY * 0.005f) + 0.02f * acc_pitch;
+    imu.pitch = 0.99f * (imu.pitch + imu.gyroY * 0.005f) + 0.01f * acc_pitch;
     imu.roll  = 0.98f * (imu.roll  + imu.gyroX * 0.005f) + 0.02f * acc_roll;
 }
 

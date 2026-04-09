@@ -19,7 +19,7 @@ static uint8_t fall_flag     = 0;
  * 标准线性死区参数
  * 逻辑：|err| = 0 时补 0，|err| >= SLOPE_ANGLE 时补全额 base_dz
  */
-#define DZ_FWD           80.0f  // 向前救车全额死区 (针对前倾问题)
+#define DZ_FWD           40.0f  // 向前救车全额死区 (针对前倾问题)
 #define DZ_BKW           40.0f   // 向后救车全额死区
 #define SLOPE_ANGLE      1.5f    // 线性过渡区间 (单位：度)
 
@@ -45,15 +45,20 @@ void Balance_Init(void)
  *============================================================*/
 void Balance_Update(void)
 {
-    /*--- Step 1: 数据采集 ---*/
-    MPU6886_Update();
-    Encoder_Update();
+	/*--- Step 1: 数据采集 ---*/
+	MPU6886_Update();
+	Encoder_Update();
 
-    float pitch      = MPU6886_GetPitch();
-    float pitch_rate = MPU6886_GetPitchRate();
-    float speed_ms   = Encoder_GetSpeedAvg_ms();
+	float pitch      = MPU6886_GetPitch();   /* 保持原来这行不变 */
+	float pitch_rate = MPU6886_GetPitchRate();
+	float speed_ms   = Encoder_GetSpeedAvg_ms();
 
-    BT_ControlData *bt = BT_GetControlData();
+	/* Low-pass filter on pitch */
+	static float pitch_filtered = 0.0f;
+	pitch_filtered = 0.85f * pitch_filtered + 0.15f * pitch;
+	pitch = pitch_filtered;   /* 直接覆盖，不重新声明 */
+
+	BT_ControlData *bt = BT_GetControlData();
 
     /*--- Step 2: 跌落保护 ---*/
     if (pitch > FALL_ANGLE_THRESHOLD || pitch < -FALL_ANGLE_THRESHOLD)
@@ -67,13 +72,13 @@ void Balance_Update(void)
     fall_flag = 0;
 
     /*--- Step 3: 目标角度与外环补偿 ---*/
-    float base_target = -4.0f; // 锁定物理平衡点
+    float base_target = 2.5f; // 锁定物理平衡点
     float angle_comp = PID_Compute(&pid_speed, bt->speed_target, speed_ms);
     float final_setpoint = base_target + angle_offset + angle_comp;
 
     /*--- Step 4: 直立环核心 PD 计算 ---*/
     float err = pitch - final_setpoint;
-    float balance_out = (pid_balance.Kp * err) + (pid_balance.Kd * pitch_rate);
+    float balance_out = (pid_balance.Kp * err) - (pid_balance.Kd * pitch_rate);
 
     /*--- Step 5: 标准线性死区补偿 (误差越大，补偿越大) ---*/
     float abs_err = (float)fabs(err);
