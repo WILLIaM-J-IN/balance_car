@@ -11,27 +11,27 @@
  *  Input : angle error (deg)
  *  Output: motor PWM
  *============================================================*/
-#define BALANCE_KP    58.0f
+#define BALANCE_KP    88.0f
 #define BALANCE_KI     0.0f
-#define BALANCE_KD     -2.4f
+#define BALANCE_KD     1.8f
 
 /*============================================================
  *  Speed PID (outer loop)
  *  Input : speed error (m/s)
  *  Output: angle compensation (deg)
  *============================================================*/
-#define SPEED_KP      -0.0f
-#define SPEED_KI      -0.0f
+#define SPEED_KP     -0.0f
+#define SPEED_KI      -0.00f
 #define SPEED_KD       0.0f
 
 /* Steering coefficient */
 #define TURN_KP      100.0f
 
 /* Upright angle setpoint (deg) */
-#define BALANCE_ANGLE_SETPOINT  -3.5f
+#define MECH_ZERO_ANGLE     0.72f
 
 /* Fall protection threshold (deg) */
-#define FALL_ANGLE_THRESHOLD    3         0.0f
+#define FALL_ANGLE_THRESHOLD    30.0f
 
 void Balance_Init(void);
 void Balance_Update(void);
