@@ -37,6 +37,7 @@
 #include "balance.h"
 #include <stdio.h>
 #include <string.h>
+#include "move.h"
 /* USER CODE END Includes */
 
 /* USER CODE BEGIN PD */
@@ -234,6 +235,130 @@ static void Pitch_Test(void)
 
 
 
+/**
+ * 死区测试 - 手动观察版
+ * 从 0 开始每隔 500ms 增加 5,直到你看到电机转动
+ * 分别测试 A正/A反/B正/B反 四个方向
+ */
+static void Motor_DeadzoneTest_Manual(void)
+{
+    RTT_LOG_INFO("[DZTest] ==== Manual Deadzone Test ====");
+    RTT_LOG_INFO("[DZTest] Watch the wheels, note the PWM when they START to spin");
+    HAL_Delay(2000);
+
+    const int16_t step = 5;
+    const int16_t max_test = 200;   /* 一般死区不会超过 200 */
+    const uint32_t interval = 500;  /* 每个 PWM 持续 500ms */
+
+    /* 测试顺序: A正 -> A反 -> B正 -> B反 */
+    const char *labels[4] = {"A_FWD", "A_BKW", "B_FWD", "B_BKW"};
+    int8_t signs[4]       = { +1,      -1,      +1,      -1   };
+    uint8_t channels[4]   = { 0,        0,       1,       1   }; /* 0=A, 1=B */
+
+    for (int t = 0; t < 4; t++)
+    {
+        RTT_LOG_INFO("[DZTest] ---- Testing %s ----", labels[t]);
+        HAL_Delay(1500);
+
+        for (int16_t pwm = 0; pwm <= max_test; pwm += step)
+        {
+            int16_t v = pwm * signs[t];
+
+            /* 注意:这里要绕过 apply_deadzone,直接调底层
+             * 否则你测的就不是真实死区了。
+             * 临时方案:把 apply_deadzone 里的 dz 设为 0 来测,
+             * 或者写一个绕过死区的接口。见下方说明。 */
+            if (channels[t] == 0) {
+                Motor_SetSpeed(v, 0);
+            } else {
+                Motor_SetSpeed(0, v);
+            }
+
+            RTT_LOG_INFO("[DZTest] %s PWM = %d", labels[t], pwm);
+            HAL_Delay(interval);
+        }
+
+        Motor_Stop();
+        RTT_LOG_INFO("[DZTest] %s done, stopping for 2s", labels[t]);
+        HAL_Delay(2000);
+    }
+
+    RTT_LOG_INFO("[DZTest] ==== All Done ====");
+    Motor_Stop();
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+static void Encoder_VerifyTest(void)
+{
+    RTT_LOG_INFO("[EncTest] ==== Encoder Verify ====");
+    Encoder_ResetDistance();
+
+    uint32_t last_print = 0;
+    uint32_t last_update = 0;
+
+    while (1)
+    {
+        uint32_t now = HAL_GetTick();
+
+        /* 每 5ms 更新一次编码器(模拟平衡环周期) */
+        if (now - last_update >= 5) {
+            last_update = now;
+            Encoder_Update();
+        }
+
+        /* 每 200ms 打印 */
+        if (now - last_print >= 200) {
+            last_print = now;
+
+            int distA_mm = (int)(Encoder_GetDistA_m() * 1000);   /* 毫米 */
+            int distB_mm = (int)(Encoder_GetDistB_m() * 1000);
+            int spdA     = (int)(Encoder_GetSpeedA_rps() * 100); /* 0.01 r/s */
+            int spdB     = (int)(Encoder_GetSpeedB_rps() * 100);
+
+            RTT_LOG_INFO("DistA=%d mm DistB=%d mm | SpdA=%d SpdB=%d (0.01r/s)",
+                         distA_mm, distB_mm, spdA, spdB);
+        }
+    }
+}
+
+
+
+
+
+
+
+
+void Wait_Until_Reached(void) {
+    while (1) {
+        float err = Balance_GetPositionError();
+        // 如果误差绝对值小于阈值，说明已到达
+        if (err < POS_REACHED_THRESH && err > -POS_REACHED_THRESH) {
+            break;
+        }
+        rt_thread_mdelay(20); // 每20ms检查一次，释放CPU
+    }
+}
+
+
+
+
+
+
+
+
 
 /* USER CODE END 0 */
 
@@ -264,26 +389,112 @@ int main(void)
     MX_USART2_UART_Init();
     MX_I2C1_Init();
     MX_SPI2_Init();
+    Move_Init();
 
     /* USER CODE BEGIN 2 */
     App_Init();
 
     uint32_t last_status_tick = 0;
     uint32_t last_bt_tick     = 0;
+//    /* ---- 主循环用到的状态变量 ---- */
+//    uint32_t t_balance   = HAL_GetTick();
+//    uint32_t t_move      = HAL_GetTick();
+//    uint32_t script_timer = HAL_GetTick();
+//    uint8_t  script_step  = 0;
+
+        uint32_t boot_tick        = HAL_GetTick(); // <--- 声明 boot_tick
+        uint8_t  pos_init_done    = 0;             // <--- 声明 pos_init_done
 
 
 
 
-//    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET);
-//    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
+
+
+
+
+
+
+
+
+
+        uint8_t  hold_inited = 0;
+
+        while (1)
+        {
+            /*--- 5ms 平衡环 ---*/
+            if (g_control_flag) {
+                g_control_flag = 0;
+                if (g_mpu_ok) Balance_Update();
+                else          Motor_Stop();
+            }
+
+            uint32_t now = HAL_GetTick();
+
+            /*--- 开机 5 秒后启用"自动位置环"模式 ---*/
+            if (!hold_inited && g_mpu_ok && now > 5000) {
+                hold_inited = 1;
+                Balance_EnableAutoHold();   /* ← 改成这个 */
+            }
+
+            /* ... status / bt 心跳 ... */
+        }
+
+
+
+
+
+
+
+
+
 //
-//    uint8_t ok = MPU6886_Init();
-//    if (!ok) {
-//        RTT_LOG_ERROR("[Main] MPU FAILED");
-//        while(1);
+//    /* 主循环里加第三个时间片 */
+//    while (1)
+//    {
+//        uint32_t now = HAL_GetTick();
+//
+//        if (now - t_balance >= 5) {
+//            t_balance = now;
+//            Balance_Update();
+//        }
+//
+//        if (now - t_move >= MOVE_UPDATE_MS) {
+//            t_move = now;
+//            Move_Update();
+//        }
+//
+//        /* 非阻塞脚本 */
+//        if (now - script_timer >= 1) {
+//            script_timer = now;
+//
+//            switch (script_step) {
+//                case 0:
+//                    if (now > 3000) {                 /* 开机 3 秒后开始 */
+//                        Move_StraightForward(0.3f);
+//                        script_step = 1;
+//                    }
+//                    break;
+//                case 1:
+//                    if (now > 5000) {                 /* 2 秒后转弯 */
+//                        Move_RotateInPlace(-40.0f);
+//                        script_step = 2;
+//                    }
+//                    break;
+//                case 2:
+//                    if (now > 7000) {                 /* 再 2 秒停车 */
+//                        Move_Stop();
+//                        Move_SetMode(MOVE_MODE_MANUAL);
+//                        script_step = 3;
+//                    }
+//                    break;
+//                default:
+//                    break;                            /* 脚本结束,进手动 */
+//            }
+//        }
 //    }
-//
-//    Pitch_Test();
+
+
+
 
 
     RTT_LOG_INFO("[Main] Enter main loop");

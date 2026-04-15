@@ -22,4 +22,15 @@ float   Encoder_GetSpeedA_rps(void);     // 电机A转速 r/s
 float   Encoder_GetSpeedB_rps(void);     // 电机B转速 r/s
 float   Encoder_GetSpeedAvg_ms(void);    // 两轮平均线速度 m/s
 
+
+
+/* ---- 位置累积 (新增) ---- */
+int32_t Encoder_GetTotalA(void);
+int32_t Encoder_GetTotalB(void);
+int32_t Encoder_GetTotalAvg(void);
+float   Encoder_GetDistA_m(void);
+float   Encoder_GetDistB_m(void);
+float   Encoder_GetDistAvg_m(void);
+void    Encoder_ResetDistance(void);
+
 #endif
