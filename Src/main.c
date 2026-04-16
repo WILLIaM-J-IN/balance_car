@@ -81,13 +81,42 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 /*------------------------------------------------------------
  *  UART2 RX → Bluetooth frame parser ($CMD#)
  *------------------------------------------------------------*/
+/*------------------------------------------------------------
+ *  UART2 RX 环形缓冲 (中断只塞字节,解析放主循环)
+ *------------------------------------------------------------*/
+#define BT_RING_SIZE 128
+static volatile uint8_t  bt_ring[BT_RING_SIZE];
+static volatile uint16_t bt_ring_head = 0;
+static volatile uint16_t bt_ring_tail = 0;
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART2)
     {
         data_received = 1;
-        BT_ParseByte(*BT_GetRxBytePtr());
+
+        /* 把字节塞进环形缓冲,中断里就这一件事 */
+        uint16_t next = (bt_ring_head + 1) % BT_RING_SIZE;
+        if (next != bt_ring_tail) {
+            bt_ring[bt_ring_head] = *BT_GetRxBytePtr();
+            bt_ring_head = next;
+        }
+        /* 缓冲满则丢弃,正常情况下主循环消费很快不会满 */
+
+        /* 立即重启接收 */
         HAL_UART_Receive_IT(&huart2, BT_GetRxBytePtr(), 1);
+    }
+}
+
+/*------------------------------------------------------------
+ *  消费环形缓冲 (主循环每次都调,解析放在这里)
+ *------------------------------------------------------------*/
+static void BT_ProcessRing(void)
+{
+    while (bt_ring_tail != bt_ring_head) {
+        uint8_t byte = bt_ring[bt_ring_tail];
+        bt_ring_tail = (bt_ring_tail + 1) % BT_RING_SIZE;
+        BT_ParseByte(byte);    /* 在主循环上下文,可以安全打日志 */
     }
 }
 
@@ -291,7 +320,31 @@ static void Motor_DeadzoneTest_Manual(void)
 
 
 
+static void BT_DebugMonitor(void)
+{
+    BT_ControlData *bt = BT_GetControlData();
 
+    if (bt->updated) {
+        bt->updated = 0;     /* 消费标志 */
+
+        const char *cmd_name = "?";
+        switch (bt->command) {
+            case BT_CMD_FORWARD:  cmd_name = "FORWARD";  break;
+            case BT_CMD_BACKWARD: cmd_name = "BACKWARD"; break;
+            case BT_CMD_LEFT:     cmd_name = "LEFT";     break;
+            case BT_CMD_RIGHT:    cmd_name = "RIGHT";    break;
+            case BT_CMD_STOP:     cmd_name = "STOP";     break;
+            case BT_CMD_VELOCITY: cmd_name = "VELOCITY"; break;
+            default: break;
+        }
+
+        int spd_cm = (int)(bt->speed_target * 100);   /* cm/s */
+        int trn_x  = (int)(bt->turn_target  * 100);   /* ×100 */
+
+        RTT_LOG_INFO("\x1B[1;32m[BT-MON] cmd=%s spd=%d cm/s turn=%d\x1B[0m",
+                     cmd_name, spd_cm, trn_x);
+    }
+}
 
 
 
@@ -408,90 +461,95 @@ int main(void)
 
 
 
-
-
-
-
-
-
-
-
-
-        uint8_t  hold_inited = 0;
-
-        while (1)
-        {
-            /*--- 5ms 平衡环 ---*/
-            if (g_control_flag) {
-                g_control_flag = 0;
-                if (g_mpu_ok) Balance_Update();
-                else          Motor_Stop();
-            }
-
-            uint32_t now = HAL_GetTick();
-
-            /*--- 开机 5 秒后启用"自动位置环"模式 ---*/
-            if (!hold_inited && g_mpu_ok && now > 5000) {
-                hold_inited = 1;
-                Balance_EnableAutoHold();   /* ← 改成这个 */
-            }
-
-            /* ... status / bt 心跳 ... */
-        }
-
-
-
-
-
-
-
-
-
+//        while (1)
+//        {
+//            /*--- 5ms 平衡环 ---*/
+//            if (g_control_flag) {
+//                g_control_flag = 0;
+//                if (g_mpu_ok) Balance_Update();
+//                else          Motor_Stop();
+//            }
 //
-//    /* 主循环里加第三个时间片 */
-//    while (1)
-//    {
-//        uint32_t now = HAL_GetTick();
+//            /*--- 蓝牙: 消费缓冲 + 监控 + 异步 ACK ---*/
+//                BT_ProcessRing();      /* ← 新增,放在最前面 */
+//                BT_DebugMonitor();
+//                BT_FlushAck();
 //
-//        if (now - t_balance >= 5) {
-//            t_balance = now;
-//            Balance_Update();
-//        }
+//            uint32_t now = HAL_GetTick();
 //
-//        if (now - t_move >= MOVE_UPDATE_MS) {
-//            t_move = now;
-//            Move_Update();
-//        }
+//            /*--- 1s 状态打印 ---*/
+//            if (now - last_status_tick >= STATUS_PERIOD_MS) {
+//                last_status_tick = now;
+//                if (g_mpu_ok) App_PrintStatus();
+//            }
 //
-//        /* 非阻塞脚本 */
-//        if (now - script_timer >= 1) {
-//            script_timer = now;
-//
-//            switch (script_step) {
-//                case 0:
-//                    if (now > 3000) {                 /* 开机 3 秒后开始 */
-//                        Move_StraightForward(0.3f);
-//                        script_step = 1;
-//                    }
-//                    break;
-//                case 1:
-//                    if (now > 5000) {                 /* 2 秒后转弯 */
-//                        Move_RotateInPlace(-40.0f);
-//                        script_step = 2;
-//                    }
-//                    break;
-//                case 2:
-//                    if (now > 7000) {                 /* 再 2 秒停车 */
-//                        Move_Stop();
-//                        Move_SetMode(MOVE_MODE_MANUAL);
-//                        script_step = 3;
-//                    }
-//                    break;
-//                default:
-//                    break;                            /* 脚本结束,进手动 */
+//            /*--- 1s 蓝牙心跳 ---*/
+//            if (now - last_bt_tick >= 1000) {
+//                last_bt_tick = now;
+//                if (!data_received) RTT_LOG_WARN("[BT] No data in last 1s");
+//                data_received = 0;
 //            }
 //        }
-//    }
+
+        uint8_t  hold_inited = 0;
+        while (1)
+               {
+                   /*--- 5ms 平衡环 ---*/
+                   if (g_control_flag) {
+                       g_control_flag = 0;
+                       if (g_mpu_ok) Balance_Update();
+                       else          Motor_Stop();
+                   }
+                   /*--- 蓝牙: 消费缓冲 + 监控 + 异步 ACK ---*/
+                                   BT_ProcessRing();      /* ← 新增,放在最前面 */
+                                   BT_DebugMonitor();
+                                   BT_FlushAck();
+                   uint32_t now = HAL_GetTick();
+
+                   /*--- 开机 5 秒后启用"自动位置环"模式 ---*/
+                   if (!hold_inited && g_mpu_ok && now > 5000) {
+                       hold_inited = 1;
+                       Balance_EnableAutoHold();   /* ← 改成这个 */
+                   }
+
+                   /* ... status / bt 心跳 ... */
+               }
+
+
+
+
+
+//pid 3.0的平衡测试代码
+
+//        uint8_t  hold_inited = 0;
+//
+//        while (1)
+//        {
+//            /*--- 5ms 平衡环 ---*/
+//            if (g_control_flag) {
+//                g_control_flag = 0;
+//                if (g_mpu_ok) Balance_Update();
+//                else          Motor_Stop();
+//            }
+//
+//            uint32_t now = HAL_GetTick();
+//
+//            /*--- 开机 5 秒后启用"自动位置环"模式 ---*/
+//            if (!hold_inited && g_mpu_ok && now > 5000) {
+//                hold_inited = 1;
+//                Balance_EnableAutoHold();   /* ← 改成这个 */
+//            }
+//
+//            /* ... status / bt 心跳 ... */
+//        }
+
+
+
+
+
+
+
+
 
 
 
